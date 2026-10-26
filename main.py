@@ -178,6 +178,24 @@ class SeatAutoBooker:
         self.cookie = ";".join(item["name"] + "=" + item["value"] for item in cookie_list)
         self.cfg["headers"]["Cookie"] = self.cookie
 
+    def _safe_log_text(self, value):
+        text = str(value).replace("\n", " ").replace("\r", " ")
+        for secret in (self.un, self.pd):
+            if secret:
+                text = text.replace(secret, "***")
+        return text[:200]
+
+    def _log_login_page_error(self):
+        host = urlsplit(self.driver.current_url).hostname
+        selectors = ("[role='alert'], .ant-form-item-explain-error, .ant-message-error, "
+                     ".ant-alert-message, .login-error, .error-message")
+        messages = []
+        for element in self.driver.find_elements(By.CSS_SELECTOR, selectors):
+            if element.is_displayed() and element.text.strip():
+                messages.append(self._safe_log_text(element.text.strip()))
+        logging.error("统一认证未返回图书馆：当前域名=%s，页面提示=%s",
+                      host, messages[:3] or "未检测到")
+
     def login(self):
         logging.info('Login in')
 
@@ -233,8 +251,12 @@ class SeatAutoBooker:
             logging.info('点击登录按钮')
 
             # 等跳回图书馆域名
-            WebDriverWait(self.driver, 30, 0.5).until(
-                lambda d: urlsplit(d.current_url).hostname == "hdu.huitu.zhishulib.com")
+            try:
+                WebDriverWait(self.driver, 30, 0.5).until(
+                    lambda d: urlsplit(d.current_url).hostname == "hdu.huitu.zhishulib.com")
+            except TimeoutException:
+                self._log_login_page_error()
+                raise
             time.sleep(5)
             self._save_cookies()
 
@@ -255,7 +277,10 @@ class SeatAutoBooker:
             payload = resp.json()
             if not isinstance(payload, dict) or 'DATA' not in payload:
                 keys = list(payload) if isinstance(payload, dict) else type(payload).__name__
-                logging.error("用户数据接口未返回 DATA：HTTP %s，响应字段=%s", resp.status_code, keys)
+                code = self._safe_log_text(payload.get('CODE')) if isinstance(payload, dict) else None
+                message = self._safe_log_text(payload.get('MESSAGE')) if isinstance(payload, dict) else None
+                logging.error("用户数据接口未返回 DATA：HTTP %s，CODE=%s，MESSAGE=%s，字段=%s",
+                              resp.status_code, code, message, keys)
                 return -1
             self.user_data = payload['DATA']
             _ = self.user_data['uid']
