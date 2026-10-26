@@ -238,7 +238,11 @@ class SeatAutoBooker:
             ):
                 if close_button.is_displayed() and close_button.is_enabled():
                     close_button.click()
-                    self.wait.until(EC.invisibility_of_element(close_button))
+                    try:
+                        WebDriverWait(self.driver, 3, 0.5).until(
+                            EC.invisibility_of_element(close_button))
+                    except TimeoutException:
+                        logging.warning("公告弹窗关闭后仍可见，继续检查登录表单")
 
             user_el.clear()
             user_el.send_keys(self.un)
