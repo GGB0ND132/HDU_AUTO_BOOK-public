@@ -213,15 +213,19 @@ class SeatAutoBooker:
         return text[:200]
 
     def _log_login_page_error(self):
-        host = urlsplit(self.driver.current_url).hostname
+        page = urlsplit(self.driver.current_url)
         selectors = ("[role='alert'], .ant-form-item-explain-error, .ant-message-error, "
                      ".ant-alert-message, .login-error, .error-message")
         messages = []
         for element in self.driver.find_elements(By.CSS_SELECTOR, selectors):
             if element.is_displayed() and element.text.strip():
                 messages.append(self._safe_log_text(element.text.strip()))
-        logging.error("统一认证未返回图书馆：当前域名=%s，页面提示=%s",
-                      host, messages[:3] or "未检测到")
+        buttons = self.driver.find_elements(By.CSS_SELECTOR, "button.login-button")
+        verification = self.driver.find_elements(
+            By.CSS_SELECTOR, "[class*='captcha'], [id*='captcha'], [class*='verify'], [id*='verify']")
+        logging.error("统一认证未返回图书馆：页面=%s%s，登录按钮可用=%s，验证控件数=%d，页面提示=%s",
+                      page.hostname, page.path, buttons[0].is_enabled() if buttons else None,
+                      len(verification), messages[:3] or "未检测到")
 
     def login(self):
         logging.info('Login in')
@@ -283,7 +287,7 @@ class SeatAutoBooker:
 
             # 等跳回图书馆域名
             try:
-                WebDriverWait(self.driver, 30, 0.5).until(
+                WebDriverWait(self.driver, 60, 0.5).until(
                     lambda d: urlsplit(d.current_url).hostname == "hdu.huitu.zhishulib.com")
             except TimeoutException:
                 self._log_login_page_error()
