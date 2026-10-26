@@ -106,6 +106,7 @@ class SeatAutoBooker:
         service = Service(chromedriver_path) if chromedriver_path else Service()
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.wait = WebDriverWait(self.driver, 10, 0.5)
+        self.http = requests.Session()
         self.cfg = booker_config
 
     def book_favorite_seat(self, user_config, seat_config):
@@ -171,24 +172,25 @@ class SeatAutoBooker:
         return self.json["CODE"], self.json["MESSAGE"] + " 座位:{}".format(seat), seat
 
     def _library_request(self, url, method="GET", data=None):
-        if urlsplit(self.driver.current_url).hostname != "hdu.huitu.zhishulib.com":
-            raise RuntimeError("浏览器当前不在图书馆页面")
-        result = self.driver.execute_async_script("""
-            const [url, method, data, done] = arguments;
-            const options = {method, credentials: 'same-origin', headers: {
-                Accept: 'application/json', 'X-Requested-With': 'com.tencent.mm'
-            }};
-            if (method === 'POST') {
-                options.headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
-                options.body = data;
-            }
-            fetch(url, options)
-                .then(async response => ({status: response.status, payload: await response.json()}))
-                .then(done, error => done({error: String(error)}));
-        """, url, method, data)
-        if not isinstance(result, dict) or result.get("error"):
-            raise RuntimeError("图书馆接口请求失败：{}".format(result.get("error") if isinstance(result, dict) else result))
-        return result["status"], result["payload"]
+        headers = dict(self.cfg["headers"])
+        headers.pop("Cookie", None)
+        headers["Referer"] = self.driver.current_url
+        try:
+            response = self.http.request(
+                method, url, data=data, headers=headers, timeout=30,
+                allow_redirects=False)
+            payload = response.json()
+        except Exception as error:
+            raise RuntimeError("图书馆接口请求失败：{}".format(error)) from error
+        return response.status_code, payload
+
+    def _sync_http_session(self):
+        self.http.cookies.clear()
+        for item in self.driver.get_cookies():
+            self.http.cookies.set(
+                item["name"], item["value"],
+                domain=item.get("domain"), path=item.get("path", "/"))
+        logging.info("已同步浏览器会话 Cookie（%d 项）", len(self.driver.get_cookies()))
 
     def _safe_log_text(self, value):
         text = str(value).replace("\n", " ").replace("\r", " ")
@@ -221,6 +223,7 @@ class SeatAutoBooker:
                 if urlsplit(self.driver.current_url).hostname != "hdu.huitu.zhishulib.com":
                     raise
                 logging.info("已进入图书馆页面，继续验证登录状态")
+                self._sync_http_session()
                 return 0
 
             # 排除同名隐藏域
@@ -270,6 +273,7 @@ class SeatAutoBooker:
                 raise
             time.sleep(5)
             logging.info("已返回图书馆页面，继续验证登录状态")
+            self._sync_http_session()
         except Exception:
             logging.exception("登录失败")
             return -1
