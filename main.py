@@ -14,6 +14,7 @@ from selenium.webdriver.common.keys import Keys
 from urllib.parse import urlsplit
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
+from selenium.common.exceptions import TimeoutException
 import time
 
 
@@ -172,6 +173,11 @@ class SeatAutoBooker:
         self.json = json.loads(self.resp.text)
         return self.json["CODE"], self.json["MESSAGE"] + " 座位:{}".format(seat), seat
 
+    def _save_cookies(self):
+        cookie_list = self.driver.get_cookies()
+        self.cookie = ";".join(item["name"] + "=" + item["value"] for item in cookie_list)
+        self.cfg["headers"]["Cookie"] = self.cookie
+
     def login(self):
         logging.info('Login in')
 
@@ -179,7 +185,14 @@ class SeatAutoBooker:
             logging.info('开始登陆...')
 
             self.driver.get("https://hdu.huitu.zhishulib.com/")
-            self.wait.until(lambda d: "sso.hdu.edu.cn" in d.current_url)
+            try:
+                self.wait.until(lambda d: urlsplit(d.current_url).hostname == "sso.hdu.edu.cn")
+            except TimeoutException:
+                if urlsplit(self.driver.current_url).hostname != "hdu.huitu.zhishulib.com":
+                    raise
+                self._save_cookies()
+                logging.info("已进入图书馆页面，继续验证登录状态")
+                return 0
 
             # 排除同名隐藏域
             form_wait = WebDriverWait(self.driver, 30, 0.5)
@@ -205,24 +218,29 @@ class SeatAutoBooker:
             pwd_el.send_keys(self.pd)
             logging.info('输入密码')
 
-            # 失焦后再点登录
+            # 失焦后等待按钮可点击；CSS 类名不能可靠反映按钮状态。
             pwd_el.send_keys(Keys.TAB)
-            form_wait.until(lambda d: "disabled" not in d.find_element(
-                By.CSS_SELECTOR, "button.login-button").get_attribute("class"))
-            self.driver.find_element(By.CSS_SELECTOR, "button.login-button").click()
+            button_locator = (By.CSS_SELECTOR, "button.login-button")
+            try:
+                login_button = form_wait.until(EC.element_to_be_clickable(button_locator))
+            except TimeoutException:
+                login_button = self.driver.find_element(*button_locator)
+                logging.error("登录按钮不可点击：enabled=%s, class=%r, aria-disabled=%r",
+                              login_button.is_enabled(), login_button.get_attribute("class"),
+                              login_button.get_attribute("aria-disabled"))
+                raise
+            login_button.click()
             logging.info('点击登录按钮')
 
             # 等跳回图书馆域名
             WebDriverWait(self.driver, 30, 0.5).until(
                 lambda d: urlsplit(d.current_url).hostname == "hdu.huitu.zhishulib.com")
             time.sleep(5)
-            cookie_list = self.driver.get_cookies()
-            self.cookie = ";".join([item["name"] + "=" + item["value"] + "" for item in cookie_list])
-            self.cfg["headers"]['Cookie'] = self.cookie
+            self._save_cookies()
 
             logging.info("登录成功！")
-        except Exception as e:
-            logging.error(f"登录失败：{e}")
+        except Exception:
+            logging.exception("登录失败")
             return -1
         return 0
 
@@ -234,7 +252,12 @@ class SeatAutoBooker:
         try:
             resp = requests.get("https://hdu.huitu.zhishulib.com/Seat/Index/searchSeats?LAB_JSON=1",
                                 headers=headers)
-            self.user_data = resp.json()['DATA']
+            payload = resp.json()
+            if not isinstance(payload, dict) or 'DATA' not in payload:
+                keys = list(payload) if isinstance(payload, dict) else type(payload).__name__
+                logging.error("用户数据接口未返回 DATA：HTTP %s，响应字段=%s", resp.status_code, keys)
+                return -1
+            self.user_data = payload['DATA']
             _ = self.user_data['uid']
         except Exception as e:
             logging.exception(e)
