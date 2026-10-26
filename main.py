@@ -2,7 +2,6 @@ import requests
 import yaml
 import random
 from datetime import datetime, timedelta
-import json
 import os
 import logging
 
@@ -81,7 +80,6 @@ def get_time_slots(date_config):
 class SeatAutoBooker:
     def __init__(self, booker_config):
         self.json = None
-        self.resp = None
         self.user_data = None
 
         logging.info('Creating SeatAutoBooker object')
@@ -108,8 +106,6 @@ class SeatAutoBooker:
         service = Service(chromedriver_path) if chromedriver_path else Service()
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.wait = WebDriverWait(self.driver, 10, 0.5)
-        self.cookie = None
-
         self.cfg = booker_config
 
     def book_favorite_seat(self, user_config, seat_config):
@@ -166,17 +162,33 @@ class SeatAutoBooker:
             seat = random.choice(seats)
         data = f"beginTime={total_seconds}&duration={3600 * hours}&&seats[0]={seat}&seatBookers[0]={self.user_data['uid']}"
 
-        headers = self.cfg["headers"]
-        headers['Cookie'] = self.cookie
-        print(data)
-        self.resp = requests.post(self.cfg["target"], data=data, headers=headers)
-        self.json = json.loads(self.resp.text)
+        print("尝试座位:{}，时段:{}".format(seat, slot_label(start, hours)))
+        status, self.json = self._library_request(self.cfg["target"], "POST", data)
+        if not isinstance(self.json, dict) or "CODE" not in self.json or "MESSAGE" not in self.json:
+            logging.error("预约接口未返回结果：HTTP %s，响应字段=%s", status,
+                          list(self.json) if isinstance(self.json, dict) else type(self.json).__name__)
+            raise ValueError("预约接口未返回 CODE/MESSAGE")
         return self.json["CODE"], self.json["MESSAGE"] + " 座位:{}".format(seat), seat
 
-    def _save_cookies(self):
-        cookie_list = self.driver.get_cookies()
-        self.cookie = ";".join(item["name"] + "=" + item["value"] for item in cookie_list)
-        self.cfg["headers"]["Cookie"] = self.cookie
+    def _library_request(self, url, method="GET", data=None):
+        if urlsplit(self.driver.current_url).hostname != "hdu.huitu.zhishulib.com":
+            raise RuntimeError("浏览器当前不在图书馆页面")
+        result = self.driver.execute_async_script("""
+            const [url, method, data, done] = arguments;
+            const options = {method, credentials: 'same-origin', headers: {
+                Accept: 'application/json', 'X-Requested-With': 'com.tencent.mm'
+            }};
+            if (method === 'POST') {
+                options.headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+                options.body = data;
+            }
+            fetch(url, options)
+                .then(async response => ({status: response.status, payload: await response.json()}))
+                .then(done, error => done({error: String(error)}));
+        """, url, method, data)
+        if not isinstance(result, dict) or result.get("error"):
+            raise RuntimeError("图书馆接口请求失败：{}".format(result.get("error") if isinstance(result, dict) else result))
+        return result["status"], result["payload"]
 
     def _safe_log_text(self, value):
         text = str(value).replace("\n", " ").replace("\r", " ")
@@ -208,7 +220,6 @@ class SeatAutoBooker:
             except TimeoutException:
                 if urlsplit(self.driver.current_url).hostname != "hdu.huitu.zhishulib.com":
                     raise
-                self._save_cookies()
                 logging.info("已进入图书馆页面，继续验证登录状态")
                 return 0
 
@@ -258,9 +269,7 @@ class SeatAutoBooker:
                 self._log_login_page_error()
                 raise
             time.sleep(5)
-            self._save_cookies()
-
-            logging.info("登录成功！")
+            logging.info("已返回图书馆页面，继续验证登录状态")
         except Exception:
             logging.exception("登录失败")
             return -1
@@ -269,18 +278,17 @@ class SeatAutoBooker:
     def get_user_info(self):
         logging.info('Getting user info')
 
-        headers = self.cfg["headers"]
-        headers['Cookie'] = self.cookie
         try:
-            resp = requests.get("https://hdu.huitu.zhishulib.com/Seat/Index/searchSeats?LAB_JSON=1",
-                                headers=headers)
-            payload = resp.json()
+            status, payload = self._library_request(
+                "https://hdu.huitu.zhishulib.com/Seat/Index/searchSeats?LAB_JSON=1")
             if not isinstance(payload, dict) or 'DATA' not in payload:
                 keys = list(payload) if isinstance(payload, dict) else type(payload).__name__
                 code = self._safe_log_text(payload.get('CODE')) if isinstance(payload, dict) else None
                 message = self._safe_log_text(payload.get('MESSAGE')) if isinstance(payload, dict) else None
                 logging.error("用户数据接口未返回 DATA：HTTP %s，CODE=%s，MESSAGE=%s，字段=%s",
-                              resp.status_code, code, message, keys)
+                              status, code, message, keys)
+                if isinstance(payload, dict) and payload.get("ui_type") == "com.Redirect":
+                    logging.error("图书馆仍要求重新登录；统一认证跳转后未建立有效图书馆会话")
                 return -1
             self.user_data = payload['DATA']
             _ = self.user_data['uid']
@@ -289,7 +297,7 @@ class SeatAutoBooker:
             print(self.user_data)
             print(e.__class__.__name__ + ",获取用户数据失败")
             return -1
-        print("获取用户数据成功")
+        print("获取用户数据成功，图书馆登录状态已验证")
         return 0
 
     def wechatNotice(self, message, desp=None):
