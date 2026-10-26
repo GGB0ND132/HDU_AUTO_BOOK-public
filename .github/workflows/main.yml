@@ -2,6 +2,11 @@ name: HDU Auto Book
 
 on:
   workflow_dispatch:
+    inputs:
+      login_check_only:
+        description: '仅验证登录，不提交预约'
+        type: boolean
+        default: false
   schedule:
     - cron: '27 12 * * *'
     - cron: '57 12 * * *'
@@ -41,4 +46,5 @@ jobs:
           SCHOOL_ID: ${{ secrets.SCHOOL_ID }}
           PASSWORD: ${{ secrets.PASSWORD }}
           SCKEY: ${{ secrets.SCKEY }}
+          LOGIN_CHECK_ONLY: ${{ inputs.login_check_only || 'false' }}
         run: xvfb-run -a python -u main.py

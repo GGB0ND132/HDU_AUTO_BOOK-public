@@ -341,6 +341,7 @@ class SeatAutoBooker:
 
 if __name__ == "__main__":
     logging.info('Start of the program')
+    login_check_only = os.environ.get("LOGIN_CHECK_ONLY", "false").lower() == "true"
     with open("user_config.yml", 'r') as f_obj:
         user_config = yaml.safe_load(f_obj)
     with open("config/basic_config.yml", 'r') as f_obj:
@@ -348,16 +349,17 @@ if __name__ == "__main__":
     with open("config/seat_config.yml", 'r') as f_obj:
         seat_config = yaml.safe_load(f_obj)
 
-    if not is_booking_enable(user_config[target_weekday_name()]):
+    if not login_check_only and not is_booking_enable(user_config[target_weekday_name()]):
         logging.info('预约未启用')
         print("预约未启用")
         exit(0)
 
-    try:
-        get_time_slots(user_config[target_weekday_name()])
-    except (ValueError, KeyError, TypeError) as e:
-        print("user_config.yml 中「{}」的时段配置有误：{}".format(target_weekday_name(), e))
-        exit(-1)
+    if not login_check_only:
+        try:
+            get_time_slots(user_config[target_weekday_name()])
+        except (ValueError, KeyError, TypeError) as e:
+            print("user_config.yml 中「{}」的时段配置有误：{}".format(target_weekday_name(), e))
+            exit(-1)
 
     s = SeatAutoBooker(basic_config["SeatAutoBooker"])
     if not s.login() == 0:
@@ -368,6 +370,10 @@ if __name__ == "__main__":
         s.driver.quit()
         logging.info('Getting user info unsuccessful')
         exit(-1)
+    if login_check_only:
+        print("登录与用户数据检查成功；未提交预约")
+        s.driver.quit()
+        exit(0)
     results = s.book_favorite_seat(user_config=user_config, seat_config=seat_config)
     for slot, code, message in results:
         print("预约结果[{}]: {} {}".format(slot, code, message))
