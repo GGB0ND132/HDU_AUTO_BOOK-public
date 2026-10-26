@@ -223,9 +223,10 @@ class SeatAutoBooker:
         buttons = self.driver.find_elements(By.CSS_SELECTOR, "button.login-button")
         verification = self.driver.find_elements(
             By.CSS_SELECTOR, "[class*='captcha'], [id*='captcha'], [class*='verify'], [id*='verify']")
-        logging.error("统一认证未返回图书馆：页面=%s%s，登录按钮可用=%s，验证控件数=%d，页面提示=%s",
+        visible_verification = sum(element.is_displayed() for element in verification)
+        logging.error("统一认证未返回图书馆：页面=%s%s，登录按钮可用=%s，可见验证控件数=%d，页面提示=%s",
                       page.hostname, page.path, buttons[0].is_enabled() if buttons else None,
-                      len(verification), messages[:3] or "未检测到")
+                      visible_verification, messages[:3] or "未检测到")
 
     def login(self):
         logging.info('Login in')
