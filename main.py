@@ -186,11 +186,24 @@ class SeatAutoBooker:
 
     def _sync_http_session(self):
         self.http.cookies.clear()
-        for item in self.driver.get_cookies():
+        cookies = self.driver.get_cookies()
+        for item in cookies:
             self.http.cookies.set(
                 item["name"], item["value"],
                 domain=item.get("domain"), path=item.get("path", "/"))
-        logging.info("已同步浏览器会话 Cookie（%d 项）", len(self.driver.get_cookies()))
+        logging.info("已同步浏览器会话 Cookie（%d 项）", len(cookies))
+
+    def _wait_for_library_session(self):
+        try:
+            WebDriverWait(self.driver, 30, 0.5).until(
+                lambda d: urlsplit(d.current_url).hostname == "hdu.huitu.zhishulib.com"
+                and len(d.get_cookies()) > 0)
+        except TimeoutException:
+            page = urlsplit(self.driver.current_url)
+            logging.error("图书馆会话未建立：页面=%s%s，Cookie 数=0",
+                          page.hostname, page.path)
+            raise
+        self._sync_http_session()
 
     def _safe_log_text(self, value):
         text = str(value).replace("\n", " ").replace("\r", " ")
@@ -222,8 +235,8 @@ class SeatAutoBooker:
             except TimeoutException:
                 if urlsplit(self.driver.current_url).hostname != "hdu.huitu.zhishulib.com":
                     raise
-                logging.info("已进入图书馆页面，继续验证登录状态")
-                self._sync_http_session()
+                logging.info("已进入图书馆页面，等待会话建立")
+                self._wait_for_library_session()
                 return 0
 
             # 排除同名隐藏域
@@ -275,9 +288,8 @@ class SeatAutoBooker:
             except TimeoutException:
                 self._log_login_page_error()
                 raise
-            time.sleep(5)
-            logging.info("已返回图书馆页面，继续验证登录状态")
-            self._sync_http_session()
+            logging.info("已返回图书馆页面，等待会话建立")
+            self._wait_for_library_session()
         except Exception:
             logging.exception("登录失败")
             return -1
