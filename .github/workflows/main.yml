@@ -41,4 +41,4 @@ jobs:
           SCHOOL_ID: ${{ secrets.SCHOOL_ID }}
           PASSWORD: ${{ secrets.PASSWORD }}
           SCKEY: ${{ secrets.SCKEY }}
-        run: xvfb-run -a python main.py
+        run: xvfb-run -a python -u main.py
